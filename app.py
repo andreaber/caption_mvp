@@ -5,13 +5,13 @@ import streamlit as st
 from assembly_ai import upload_file, transcribe, save_srt
 from burn import burn_subtitles
 
-from deep_translator import GoogleTranslator
+import re
+from deep_translator import GoogleTranslator, MyMemoryTranslator
 
 
 # =========================
 # Helpers extra
 # =========================
-import re
 
 def srt_to_txt(srt_file: Path) -> str:
     """Convierte un .srt a texto plano (sin tiempos ni índices)."""
@@ -102,13 +102,14 @@ if uploaded:
     with open(video_local_path, "wb") as f:
         f.write(uploaded.getbuffer())
 
-    # Vista previa (si el archivo no es gigante)
-    st.video(str(video_local_path))
-
-    size_mb = uploaded.size / (1024 * 1024)
-    st.caption(f"Tamaño del clip: {size_mb:.1f} MB")
-    if size_mb > 50:
-        st.warning("Sugerencia: para la demo, usá clips cortos (< ~1 min).")
+    # Vista previa centrada y con ancho controlado
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.video(str(video_local_path))
+        size_mb = uploaded.size / (1024 * 1024)
+        st.caption(f"Tamaño del clip: {size_mb:.1f} MB")
+        if size_mb > 50:
+            st.warning("Sugerencia: para la demo, usá clips cortos (< ~1 min).")
 
 st.divider()
 
@@ -190,12 +191,66 @@ if st.button("📝 Generar subtítulos (.srt)", disabled=not bool(video_local_pa
 st.divider()
 st.subheader("🌐 Traducir subtítulos (opcional)")
 
+# def _translate_srt_file(input_srt: Path, src="auto", tgt="en") -> Path:
+#     import re
+#     from deep_translator import GoogleTranslator
+#     time_pat = re.compile(r"^\d{2}:\d{2}:\d{2},\d{3}\s-->\s\d{2}:\d{2}:\d{2},\d{3}$")
+#     # Si src == "auto", GoogleTranslator detecta automáticamente
+#     gt = GoogleTranslator(source=src if src != "auto" else "auto", target=tgt)
+#     out_path = input_srt.with_name(input_srt.stem + f"_{tgt}.srt")
+
+#     with input_srt.open("r", encoding="utf-8", errors="ignore") as fin, \
+#          out_path.open("w", encoding="utf-8") as fout:
+
+#         block = []
+#         def flush_block(lines):
+#             if not lines:
+#                 fout.write("\n"); return
+#             fout.write(lines[0] + "\n")  # índice
+#             if len(lines) >= 2 and time_pat.match(lines[1].strip()):
+#                 fout.write(lines[1] + "\n")
+#                 text_lines = lines[2:]
+#             else:
+#                 for ln in lines[1:]:
+#                     fout.write(ln + "\n")
+#                 fout.write("\n"); return
+#             for tl in text_lines:
+#                 t = tl.strip()
+#                 if not t:
+#                     fout.write("\n"); continue
+#                 try:
+#                     fout.write(gt.translate(t) + "\n")
+#                 except Exception:
+#                     fout.write(t + "\n")
+#             fout.write("\n")
+
+#         for line in fin:
+#             line = line.rstrip("\n")
+#             if line.strip() == "":
+#                 flush_block(block); block = []
+#             else:
+#                 block.append(line)
+#         if block:
+#             flush_block(block)
+
+#     return out_path
+
 def _translate_srt_file(input_srt: Path, src="auto", tgt="en") -> Path:
-    import re
-    from deep_translator import GoogleTranslator
+    """
+    Traduce solo las líneas de texto de un SRT (conserva índices y tiempos).
+    Fuerza idioma de origen (evita 'spanglish') y usa fallback si Google falla.
+    """
     time_pat = re.compile(r"^\d{2}:\d{2}:\d{2},\d{3}\s-->\s\d{2}:\d{2}:\d{2},\d{3}$")
-    # Si src == "auto", GoogleTranslator detecta automáticamente
-    gt = GoogleTranslator(source=src if src != "auto" else "auto", target=tgt)
+    # Si el usuario puso 'auto', asumimos ES como origen para evitar autodetección inestable
+    src_eff = src if src != "auto" else "es"
+
+    def translate_line(txt: str) -> str:
+        try:
+            return GoogleTranslator(source=src_eff, target=tgt).translate(txt)
+        except Exception:
+            # Fallback público cuando el endpoint de Google bloquea desde el hosting
+            return MyMemoryTranslator(source=src_eff, target=tgt).translate(txt)
+
     out_path = input_srt.with_name(input_srt.stem + f"_{tgt}.srt")
 
     with input_srt.open("r", encoding="utf-8", errors="ignore") as fin, \
@@ -205,7 +260,9 @@ def _translate_srt_file(input_srt: Path, src="auto", tgt="en") -> Path:
         def flush_block(lines):
             if not lines:
                 fout.write("\n"); return
-            fout.write(lines[0] + "\n")  # índice
+            # índice
+            fout.write(lines[0] + "\n")
+            # tiempos
             if len(lines) >= 2 and time_pat.match(lines[1].strip()):
                 fout.write(lines[1] + "\n")
                 text_lines = lines[2:]
@@ -213,12 +270,13 @@ def _translate_srt_file(input_srt: Path, src="auto", tgt="en") -> Path:
                 for ln in lines[1:]:
                     fout.write(ln + "\n")
                 fout.write("\n"); return
+            # traducir solo texto
             for tl in text_lines:
                 t = tl.strip()
                 if not t:
                     fout.write("\n"); continue
                 try:
-                    fout.write(gt.translate(t) + "\n")
+                    fout.write(translate_line(t) + "\n")
                 except Exception:
                     fout.write(t + "\n")
             fout.write("\n")
