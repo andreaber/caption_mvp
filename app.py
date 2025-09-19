@@ -5,8 +5,8 @@ import streamlit as st
 from assembly_ai import upload_file, transcribe, save_srt
 from burn import burn_subtitles
 
-import re
-from deep_translator import GoogleTranslator, MyMemoryTranslator
+import os, re
+import deepl
 
 
 # =========================
@@ -108,6 +108,8 @@ show_debug = st.sidebar.checkbox("Mostrar logs de depuración", value=False)
 # =========================
 # Subida de video
 # =========================
+st.subheader("📤 Subir MP4")
+
 uploaded = st.file_uploader("Subí un archivo de video (.mp4)", type=["mp4"])
 video_local_path = None
 
@@ -132,7 +134,9 @@ st.divider()
 # =========================
 # Botón: Transcribir → SRT
 # =========================
-if st.button("📝 Generar subtítulos (.srt)", disabled=not bool(video_local_path)):
+st.subheader("📝 Generar subtítulos (SRT)")
+
+if st.button("📝 Generar subtítulos (SRT)", disabled=not bool(video_local_path)):
     if not video_local_path:
         st.error("Primero subí un MP4.")
         st.stop()
@@ -206,73 +210,37 @@ if st.button("📝 Generar subtítulos (.srt)", disabled=not bool(video_local_pa
 st.divider()
 st.subheader("🌐 Traducir subtítulos (opcional)")
 
-# def _translate_srt_file(input_srt: Path, src="auto", tgt="en") -> Path:
-#     import re
-#     from deep_translator import GoogleTranslator
-#     time_pat = re.compile(r"^\d{2}:\d{2}:\d{2},\d{3}\s-->\s\d{2}:\d{2}:\d{2},\d{3}$")
-#     # Si src == "auto", GoogleTranslator detecta automáticamente
-#     gt = GoogleTranslator(source=src if src != "auto" else "auto", target=tgt)
-#     out_path = input_srt.with_name(input_srt.stem + f"_{tgt}.srt")
-
-#     with input_srt.open("r", encoding="utf-8", errors="ignore") as fin, \
-#          out_path.open("w", encoding="utf-8") as fout:
-
-#         block = []
-#         def flush_block(lines):
-#             if not lines:
-#                 fout.write("\n"); return
-#             fout.write(lines[0] + "\n")  # índice
-#             if len(lines) >= 2 and time_pat.match(lines[1].strip()):
-#                 fout.write(lines[1] + "\n")
-#                 text_lines = lines[2:]
-#             else:
-#                 for ln in lines[1:]:
-#                     fout.write(ln + "\n")
-#                 fout.write("\n"); return
-#             for tl in text_lines:
-#                 t = tl.strip()
-#                 if not t:
-#                     fout.write("\n"); continue
-#                 try:
-#                     fout.write(gt.translate(t) + "\n")
-#                 except Exception:
-#                     fout.write(t + "\n")
-#             fout.write("\n")
-
-#         for line in fin:
-#             line = line.rstrip("\n")
-#             if line.strip() == "":
-#                 flush_block(block); block = []
-#             else:
-#                 block.append(line)
-#         if block:
-#             flush_block(block)
-
-#     return out_path
-
 def _translate_srt_file(input_srt: Path, src="auto", tgt="en") -> Path:
     """
-    Traduce solo las líneas de texto de un SRT (conserva índices y tiempos).
-    Fuerza idioma de origen (evita 'spanglish') y usa fallback si Google falla.
+    Traduce solo las líneas de texto de un SRT con DeepL.
+    Conserva índices y tiempos. 'src' puede ser 'auto' o es/en/pt/fr/it/de.
     """
+    key = os.getenv("DEEPL_API_KEY")
+    if not key:
+        raise RuntimeError("Falta DEEPL_API_KEY en el entorno.")
+
+    translator = deepl.Translator(key)
+
+    def _dl(code: str | None):
+        mapa = {"es": "ES", "en": "EN", "pt": "PT", "fr": "FR", "it": "IT", "de": "DE"}
+        if code in (None, "auto"):
+            return None
+        return mapa.get(code.lower())
+
+    src_dl = _dl(src)
+    tgt_dl = _dl(tgt)  # obligatorio
+    if not tgt_dl:
+        raise ValueError("Idioma destino inválido.")
+
     time_pat = re.compile(r"^\d{2}:\d{2}:\d{2},\d{3}\s-->\s\d{2}:\d{2}:\d{2},\d{3}$")
-    # Si el usuario puso 'auto', asumimos ES como origen para evitar autodetección inestable
-    src_eff = src if src != "auto" else "es"
-
-    def translate_line(txt: str) -> str:
-        try:
-            return GoogleTranslator(source=src_eff, target=tgt).translate(txt)
-        except Exception:
-            # Fallback público cuando el endpoint de Google bloquea desde el hosting
-            return MyMemoryTranslator(source=src_eff, target=tgt).translate(txt)
-
     out_path = input_srt.with_name(input_srt.stem + f"_{tgt}.srt")
 
     with input_srt.open("r", encoding="utf-8", errors="ignore") as fin, \
          out_path.open("w", encoding="utf-8") as fout:
 
-        block = []
-        def flush_block(lines):
+        block: list[str] = []
+
+        def flush_block(lines: list[str]):
             if not lines:
                 fout.write("\n"); return
             # índice
@@ -282,6 +250,7 @@ def _translate_srt_file(input_srt: Path, src="auto", tgt="en") -> Path:
                 fout.write(lines[1] + "\n")
                 text_lines = lines[2:]
             else:
+                # bloque raro; se copia tal cual
                 for ln in lines[1:]:
                     fout.write(ln + "\n")
                 fout.write("\n"); return
@@ -291,7 +260,8 @@ def _translate_srt_file(input_srt: Path, src="auto", tgt="en") -> Path:
                 if not t:
                     fout.write("\n"); continue
                 try:
-                    fout.write(translate_line(t) + "\n")
+                    tr = translator.translate_text(t, source_lang=src_dl, target_lang=tgt_dl)
+                    fout.write(str(tr) + "\n")
                 except Exception:
                     fout.write(t + "\n")
             fout.write("\n")
@@ -306,6 +276,7 @@ def _translate_srt_file(input_srt: Path, src="auto", tgt="en") -> Path:
             flush_block(block)
 
     return out_path
+
 
 if "last_srt_path" in st.session_state:
     # Si el usuario no eligió destino, no traducimos
@@ -367,56 +338,6 @@ else:
 
 
 
-# =========================
-# Descargas adicionales (SRT y TXT)
-# =========================
-st.divider()
-st.subheader("⬇️ Descargas adicionales")
-
-if "last_srt_path" in st.session_state:
-    srt_path_active = Path(st.session_state["last_srt_path"])
-    active_lang = st.session_state.get("active_lang", "es")
-
-    # Descargar SRT
-    with open(srt_path_active, "rb") as f:
-        st.download_button(
-            label=f"Descargar SRT ({active_lang.upper()})",
-            data=f.read(),
-            file_name=srt_path_active.name,
-            mime="text/plain",
-        )
-    # Descargar TXT
-    try:
-        txt_content = srt_to_txt(srt_path_active)
-        st.download_button(
-            label=f"Descargar TXT ({active_lang.upper()})",
-            data=txt_content.encode("utf-8"),
-            file_name=f"{srt_path_active.stem}.txt",
-            mime="text/plain",
-        )
-    except Exception as e:
-        st.info(f"No pude generar el .txt desde el SRT activo ({e}).")
-else:
-    st.info("Generá (o traducí) un SRT para habilitar las descargas.")
-
-
-
-# =========================
-# Limpieza (opcional)
-# =========================
-st.divider()
-if st.button("🧹 Limpiar archivos temporales"):
-    try:
-        for p in WORKDIR.glob("*"):
-            p.unlink(missing_ok=True)
-        # limpiar estado
-        for k in ("srts", "active_lang", "last_srt_path", "last_video_path"):
-            st.session_state.pop(k, None)
-        st.success("Se limpió la carpeta temporal.")
-    except Exception as e:
-        st.error(f"No se pudo limpiar: {e}")
-
-
 
 # =========================
 # Bloque fijo: Quemar subtítulos (usar SRT activo)
@@ -464,3 +385,60 @@ if "last_video_path" in st.session_state and "last_srt_path" in st.session_state
                 st.error(f"No se pudo generar el video: {e}")
 else:
     st.info("Generá (o traducí) un SRT para habilitar el quemado.")
+
+
+
+# =========================
+# Descargas adicionales (SRT y TXT)
+# =========================
+st.divider()
+st.subheader("⬇️ Descargas")
+
+if "last_srt_path" in st.session_state:
+    srt_path_active = Path(st.session_state["last_srt_path"])
+    active_lang = st.session_state.get("active_lang", "es")
+
+    # Descargar SRT
+    with open(srt_path_active, "rb") as f:
+        st.download_button(
+            label=f"Descargar SRT ({active_lang.upper()})",
+            data=f.read(),
+            file_name=srt_path_active.name,
+            mime="text/plain",
+        )
+    # Descargar TXT
+    try:
+        txt_content = srt_to_txt(srt_path_active)
+        st.download_button(
+            label=f"Descargar TXT ({active_lang.upper()})",
+            data=txt_content.encode("utf-8"),
+            file_name=f"{srt_path_active.stem}.txt",
+            mime="text/plain",
+        )
+    except Exception as e:
+        st.info(f"No pude generar el .txt desde el SRT activo ({e}).")
+else:
+    st.info("Generá (o traducí) un SRT para habilitar las descargas.")
+
+
+
+
+# =========================
+# Limpieza (opcional)
+# =========================
+st.divider()
+if st.button("🧹 Limpiar archivos temporales"):
+    try:
+        # Reemplazá tu for existente por este:
+        for p in WORKDIR.glob("*"):
+            (p.unlink(missing_ok=True) if p.is_file()
+             else __import__("shutil").rmtree(p, ignore_errors=True))
+
+        # limpiar estado
+        for k in ("srts", "active_lang", "last_srt_path", "last_video_path"):
+            st.session_state.pop(k, None)
+
+        st.success("Se limpió la carpeta temporal.")
+    except Exception as e:
+        st.error(f"No se pudo limpiar: {e}")
+
