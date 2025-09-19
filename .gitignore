@@ -1,0 +1,7 @@
+.env
+workdir/
+*.mp4
+*.srt
+__pycache__/
+*.log
+.DS_Store
