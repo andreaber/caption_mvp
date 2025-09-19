@@ -62,12 +62,27 @@ def _init_srts():
 # =========================
 st.set_page_config(page_title="Caption MVP", page_icon="🎬", layout="centered")
 _init_srts()
+
+# Limitar el ancho del <video> y centrarlo
+st.markdown("""
+<style>
+div[data-testid="stVideo"] video {
+  max-width: 480px !important;
+  width: 100% !important;
+  height: auto !important;
+  display: block;
+  margin: 0 auto;
+}
+</style>
+""", unsafe_allow_html=True)
+
 st.title("🎬 Caption MVP — Transcripción a SRT")
 st.caption("Subí un MP4, elegí idioma y generá subtítulos (.srt).")
 
 # Carpeta de trabajo para archivos temporales
 WORKDIR = Path("workdir")
 WORKDIR.mkdir(exist_ok=True)
+
 
 # =========================
 # Sidebar (opciones)
