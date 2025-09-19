@@ -446,7 +446,12 @@ if "last_video_path" in st.session_state and "last_srt_path" in st.session_state
                     fontsize=fs,               # <— usar slider
                 )
                 st.success(f"✅ Video generado con subtítulos en {active_lang.upper()}.")
-                st.video(str(output_path))
+
+                # Vista previa centrada y con ancho controlado
+                col1, col2, col3 = st.columns([1, 2, 1])
+                with col2:
+                    st.video(str(output_path))
+
                 with open(output_path, "rb") as f:
                     st.download_button(
                         label=f"⬇️ Descargar MP4 ({active_lang.upper()})",
@@ -454,6 +459,7 @@ if "last_video_path" in st.session_state and "last_srt_path" in st.session_state
                         file_name=output_path.name,
                         mime="video/mp4",
                     )
+
             except Exception as e:
                 st.error(f"No se pudo generar el video: {e}")
 else:

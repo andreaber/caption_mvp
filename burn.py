@@ -18,19 +18,18 @@ def burn_subtitles(input_mp4: str, srt_path: str, output_mp4: str, fontsize: int
     # En Windows, al filtro subtitles le gustan las rutas con / y el : escapado
     srt_esc = str(srt).replace("\\", "/").replace(":", r"\:")
 
+    # Escalar a máx. 720 px de ancho y luego quemar subtítulos
+    max_w = 720  # cambiá el tope si querés
     if fontsize:
-        vf = f"subtitles='{srt_esc}':force_style='Fontsize={fontsize},Outline=1,Shadow=1'"
+        vf = (
+            f"scale='min({max_w},iw)':-2,"
+            f"subtitles='{srt_esc}':force_style='Fontsize={fontsize},Outline=1,Shadow=1'"
+        )
     else:
-        vf = f"subtitles='{srt_esc}'"
+        vf = f"scale='min({max_w},iw)':-2,subtitles='{srt_esc}'"
 
-    cmd = [
-        FFMPEG_BIN,
-        "-y",
-        "-i", str(in_mp4),
-        "-vf", vf,
-        "-c:a", "copy",
-        str(out_mp4),
-    ]
+    cmd = [FFMPEG_BIN, "-y", "-i", str(in_mp4), "-vf", vf, "-c:v", "libx264", "-crf", "20", "-preset", "veryfast", "-c:a", "copy", str(out_mp4)]
+
 
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
