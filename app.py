@@ -1,4 +1,7 @@
 # app.py
+from dotenv import load_dotenv, find_dotenv
+load_dotenv(find_dotenv(), override=True)
+
 from pathlib import Path
 import streamlit as st
 
@@ -89,11 +92,15 @@ WORKDIR.mkdir(exist_ok=True)
 # =========================
 st.sidebar.header("Opciones")
 # Origen para transcripción (Auto = detección automática)
-lang_src = st.sidebar.selectbox(
-    "Idioma de origen (transcripción)",
-    ["auto", "es", "en", "pt", "fr", "it", "de"],
-    index=0
-)
+# lang_src = st.sidebar.selectbox(
+#     "Idioma de origen (transcripción)",
+#     ["auto", "es", "en", "pt", "fr", "it", "de"],
+#     index=0
+# )
+
+# Origen fijo para demo
+lang_src = "es"
+st.sidebar.info("Origen fijado: Español (ES)")
 
 # Destino para traducción (— sin traducción — = usar SRT original)
 lang_dst = st.sidebar.selectbox(
@@ -103,7 +110,15 @@ lang_dst = st.sidebar.selectbox(
 )
 
 show_debug = st.sidebar.checkbox("Mostrar logs de depuración", value=False)
+if show_debug:
+    try:
+        tr = deepl.Translator(os.getenv("DEEPL_API_KEY"))
+        prueba = tr.translate_text("Hola, esto es una prueba.", source_lang="ES", target_lang="EN-US").text
+        st.write("Test DeepL ES→EN-US:", prueba)
+    except Exception as e:
+        st.error(f"DeepL no responde: {e}")
 
+    
 
 # =========================
 # Subida de video
@@ -156,7 +171,8 @@ if st.button("📝 Generar subtítulos (SRT)", disabled=not bool(video_local_pat
             if lang_src == "auto":
                 result = transcribe(audio_url)
             else:
-                result = transcribe(audio_url, lang_hint=lang_src)
+                # result = transcribe(audio_url, lang_hint=lang_src)
+                result = transcribe(audio_url, lang_hint="es")
         except Exception as e:
             st.error(f"Error durante la transcripción: {e}")
             st.stop()
@@ -177,7 +193,8 @@ if st.button("📝 Generar subtítulos (SRT)", disabled=not bool(video_local_pat
     st.success("✅ SRT generado con éxito.")
 
     # --- Estado: guardar y activar SRT original ---
-    orig_lang = lang_src if lang_src != "auto" else "es"   # simple: si usaste auto, asumimos ES
+    # orig_lang = lang_src if lang_src != "auto" else "es"   # simple: si usaste auto, asumimos ES
+    orig_lang = "es"
     st.session_state["srts"][orig_lang] = str(srt_path)
     st.session_state["active_lang"] = orig_lang
 
@@ -210,6 +227,7 @@ if st.button("📝 Generar subtítulos (SRT)", disabled=not bool(video_local_pat
 st.divider()
 st.subheader("🌐 Traducir subtítulos (opcional)")
 
+
 def _translate_srt_file(input_srt: Path, src="auto", tgt="en") -> Path:
     """
     Traduce solo las líneas de texto de un SRT con DeepL.
@@ -221,14 +239,27 @@ def _translate_srt_file(input_srt: Path, src="auto", tgt="en") -> Path:
 
     translator = deepl.Translator(key)
 
-    def _dl(code: str | None):
+    # DeepL acepta 'None' como autodetección para source.
+    def _dl_src(code: str | None):
         mapa = {"es": "ES", "en": "EN", "pt": "PT", "fr": "FR", "it": "IT", "de": "DE"}
         if code in (None, "auto"):
             return None
         return mapa.get(code.lower())
 
-    src_dl = _dl(src)
-    tgt_dl = _dl(tgt)  # obligatorio
+    # Para target, DeepL exige variantes para EN y PT.
+    def _dl_tgt(code: str):
+        mapa = {
+            "es": "ES",
+            "en": "EN-US",   # o "EN-GB" si preferís británico
+            "pt": "PT-BR",   # o "PT-PT" si preferís europeo
+            "fr": "FR",
+            "it": "IT",
+            "de": "DE",
+        }
+        return mapa.get(code.lower())
+
+    src_dl = _dl_src(src)
+    tgt_dl = _dl_tgt(tgt)  # obligatorio
     if not tgt_dl:
         raise ValueError("Idioma destino inválido.")
 
@@ -243,27 +274,32 @@ def _translate_srt_file(input_srt: Path, src="auto", tgt="en") -> Path:
         def flush_block(lines: list[str]):
             if not lines:
                 fout.write("\n"); return
-            # índice
+            # 1) índice
             fout.write(lines[0] + "\n")
-            # tiempos
+            # 2) tiempos
             if len(lines) >= 2 and time_pat.match(lines[1].strip()):
                 fout.write(lines[1] + "\n")
                 text_lines = lines[2:]
             else:
-                # bloque raro; se copia tal cual
+                # bloque atípico: se copia tal cual
                 for ln in lines[1:]:
                     fout.write(ln + "\n")
                 fout.write("\n"); return
-            # traducir solo texto
-            for tl in text_lines:
-                t = tl.strip()
-                if not t:
-                    fout.write("\n"); continue
-                try:
-                    tr = translator.translate_text(t, source_lang=src_dl, target_lang=tgt_dl)
-                    fout.write(str(tr) + "\n")
-                except Exception:
-                    fout.write(t + "\n")
+            # 3) traducir el BLOQUE completo (mejor calidad que línea por línea)
+            block_text = " ".join([tl.strip() for tl in text_lines if tl.strip()])
+            try:
+                tr = translator.translate_text(
+                    block_text,
+                    source_lang=(src_dl or "ES"),   # fuerza español si venía 'auto' o None
+                    target_lang=tgt_dl,             # EN-US / PT-BR / etc.
+                    split_sentences="1",            # deja que DeepL corte bien
+                    formality="default",
+                )
+                fout.write(tr.text + "\n")  # una sola línea traducida
+            except Exception:
+                # ante error, dejamos el bloque original (unido)
+                fout.write(block_text + "\n")
+
             fout.write("\n")
 
         for line in fin:
@@ -278,6 +314,7 @@ def _translate_srt_file(input_srt: Path, src="auto", tgt="en") -> Path:
     return out_path
 
 
+
 if "last_srt_path" in st.session_state:
     # Si el usuario no eligió destino, no traducimos
     if lang_dst == "— sin traducción —":
@@ -289,7 +326,8 @@ if "last_srt_path" in st.session_state:
                 # Preview y descarga del SRT traducido
                 with st.spinner(f"Traduciendo a {lang_dst.upper()}..."):
                     # pasamos lang_src como origen (o 'auto' si así lo elegiste en la sidebar)
-                    out_path = _translate_srt_file(src_srt, src=lang_src, tgt=lang_dst)
+                    # out_path = _translate_srt_file(src_srt, src=st.session_state.get("active_lang", "es"), tgt=lang_dst)
+                    out_path = _translate_srt_file(src_srt, src="es", tgt=lang_dst)
                 
                 # tras traducir a lang_dst:
                 st.session_state["srts"][lang_dst] = str(out_path)
@@ -351,6 +389,24 @@ if "last_video_path" in st.session_state and "last_srt_path" in st.session_state
     active_lang = st.session_state.get("active_lang", "es")
 
     st.markdown(f"**SRT activo:** {active_lang.upper()}  ·  Archivo: `{srt_active.name}`")
+
+    # Verificación rápida del SRT activo
+    with st.expander("Verificación rápida del SRT activo"):
+        try:
+            with open(srt_active, "r", encoding="utf-8", errors="ignore") as f:
+                preview_activo = "".join(f.readlines()[:10])
+            st.code(preview_activo, language="text")
+        except Exception as e:
+            st.warning(f"No pude leer el SRT activo: {e}")
+
+    # Pegar AQUÍ el guardia
+    if active_lang in {"en", "it", "fr", "pt", "de"}:
+        if not srt_active.name.endswith(f"_{active_lang}.srt"):
+            st.warning(
+                f"Atención: el archivo activo no coincide con el idioma seleccionado. "
+                f"Archivo: {srt_active.name} · Idioma activo: {active_lang.upper()}"
+            )
+
 
     # Nombre final claro: video_ES.mp4, video_EN.mp4, etc.
     output_path = WORKDIR / f"{vid_path.stem}_{active_lang}.mp4"
